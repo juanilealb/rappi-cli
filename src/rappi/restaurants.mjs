@@ -1,6 +1,9 @@
 import { assertRestaurantUrl, assertRestaurantVertical } from './policy.mjs';
 import { textToNumber } from './dom-utils.mjs';
 
+const RESTAURANT_LINK_SELECTOR = 'a[href*="/restaurantes/"], a[href*="/restaurant/"]';
+const GENERIC_PATH_SEGMENTS = new Set(['delivery', 'restaurant', 'restaurantes', 'search', 'categoria', 'categorias']);
+
 const STOPWORDS = new Set([
   'a',
   'al',
@@ -33,15 +36,67 @@ export function buildRestaurantsSearchUrl(baseUrl, query, city) {
 export async function searchRestaurants(page, { baseUrl, query, city, max = 20, minRating, deliveryFeeMax }) {
   const searchUrl = buildRestaurantsSearchUrl(baseUrl, query, city);
   await page.goto(searchUrl, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(1800);
+  await page.waitForTimeout(1000);
+  if (typeof page.waitForLoadState === 'function') {
+    await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+  }
+  if (typeof page.waitForSelector === 'function') {
+    await page.waitForSelector(RESTAURANT_LINK_SELECTOR, { timeout: 8000 }).catch(() => {});
+  }
+  await page.waitForTimeout(400);
 
-  const raw = await page.$$eval('a[href*="/restaurantes/"], a[href*="/restaurant/"]', (anchors) => {
-    return anchors.map((a) => {
-      const card = a.closest('article,li,div') || a;
-      const href = a.href || a.getAttribute('href') || '';
-      const anchorText = (a.textContent || '').trim().replace(/\s+/g, ' ');
-      const textBlob = (card.textContent || '').trim().replace(/\s+/g, ' ');
-      return { href, anchorText, textBlob };
+  const raw = await page.$$eval(RESTAURANT_LINK_SELECTOR, (anchors) => {
+    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const pushUnique = (list, value) => {
+      const text = clean(value);
+      if (text && !list.includes(text)) {
+        list.push(text);
+      }
+    };
+
+    const nameSelectors = [
+      '[data-testid*="store-name"]',
+      '[data-testid*="restaurant-name"]',
+      '[data-qa*="store-name"]',
+      '[data-qa*="restaurant-name"]',
+      'h2',
+      'h3',
+      'strong',
+      '[role="heading"]'
+    ];
+
+    return anchors.slice(0, 1200).map((anchor) => {
+      const card = anchor.closest('[data-testid*="store"], [data-qa*="store"], article, li, section, div') || anchor;
+      const href = anchor.href || anchor.getAttribute('href') || '';
+      const nameCandidates = [];
+
+      pushUnique(nameCandidates, anchor.getAttribute('aria-label'));
+      pushUnique(nameCandidates, anchor.getAttribute('title'));
+      pushUnique(nameCandidates, anchor.textContent);
+
+      for (const selector of nameSelectors) {
+        const fromAnchor = anchor.querySelector(selector);
+        const fromCard = card.querySelector(selector);
+        if (fromAnchor) {
+          pushUnique(nameCandidates, fromAnchor.textContent);
+        }
+        if (fromCard) {
+          pushUnique(nameCandidates, fromCard.textContent);
+        }
+      }
+
+      const shortText = Array.from(card.querySelectorAll('h1,h2,h3,strong,span,p'))
+        .map((element) => clean(element.textContent))
+        .filter((text) => text.length >= 3 && text.length <= 96)
+        .slice(0, 18);
+
+      return {
+        href,
+        anchorText: clean(anchor.textContent),
+        textBlob: clean(card.textContent).slice(0, 700),
+        nameCandidates,
+        shortText
+      };
     });
   });
 
@@ -55,13 +110,18 @@ export async function searchRestaurants(page, { baseUrl, query, city, max = 20, 
     const rating = parseRating(item.textBlob);
     const deliveryFee = parseDeliveryFee(item.textBlob);
     const name = pickRestaurantName(item);
+    const snippet = [item.textBlob, ...(Array.isArray(item.shortText) ? item.shortText : [])]
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 220);
 
     dedup.set(safeUrl, {
       name,
       url: safeUrl,
       rating,
       deliveryFee,
-      snippet: item.textBlob.slice(0, 220)
+      snippet
     });
   }
 
@@ -79,32 +139,62 @@ export async function searchRestaurants(page, { baseUrl, query, city, max = 20, 
   return results.slice(0, max);
 }
 
-function pickRestaurantName(item) {
-  const rawCandidate = String(item.anchorText || '').replace(/\s+/g, ' ').trim();
-  if (rawCandidate.length > 2) {
-    const fragment = rawCandidate.split(/[|·•]/).map((value) => value.trim()).find(isLikelyRestaurantName);
+export function pickRestaurantName(item) {
+  const candidates = [];
+  const pushCandidate = (value) => {
+    const clean = String(value || '').replace(/\s+/g, ' ').trim();
+    if (clean && !candidates.includes(clean)) {
+      candidates.push(clean);
+    }
+  };
+
+  if (Array.isArray(item?.nameCandidates)) {
+    for (const value of item.nameCandidates) {
+      pushCandidate(value);
+    }
+  }
+  if (Array.isArray(item?.shortText)) {
+    for (const value of item.shortText) {
+      pushCandidate(value);
+    }
+  }
+  pushCandidate(item?.anchorText);
+
+  for (const candidate of candidates) {
+    const fragment = candidate
+      .split(/[|·•]/)
+      .map((value) => sanitizeRestaurantName(value))
+      .find(isLikelyRestaurantName);
     if (fragment) {
       return fragment;
     }
-    if (isLikelyRestaurantName(rawCandidate)) {
-      return rawCandidate;
+    const cleanCandidate = sanitizeRestaurantName(candidate);
+    if (isLikelyRestaurantName(cleanCandidate)) {
+      return cleanCandidate;
     }
   }
-  const candidate = String(item.textBlob || '')
+
+  const blobCandidate = String(item?.textBlob || '')
     .split(/\s{2,}|\||·|•/)
-    .map((segment) => segment.trim())
+    .map((segment) => sanitizeRestaurantName(segment))
     .find(isLikelyRestaurantName);
-  return candidate ? candidate.trim() : 'Unknown restaurant';
+  if (blobCandidate) {
+    return blobCandidate;
+  }
+
+  const urlFallback = deriveNameFromRestaurantUrl(item?.href);
+  return urlFallback || 'Unknown restaurant';
 }
 
 function parseRating(text) {
+  const source = String(text || '');
   const patterns = [
     /(?:★|⭐|rating|calificacion|calificación)\s*([0-9](?:[.,][0-9])?)/i,
     /([0-9](?:[.,][0-9])?)\s*(?:★|⭐)/i
   ];
 
   for (const pattern of patterns) {
-    const match = text.match(pattern);
+    const match = source.match(pattern);
     if (match) {
       return textToNumber(match[1]);
     }
@@ -113,7 +203,7 @@ function parseRating(text) {
   return null;
 }
 
-function normalizeAndValidateRestaurantUrl(href, baseUrl) {
+export function normalizeAndValidateRestaurantUrl(href, baseUrl) {
   if (!href) {
     return null;
   }
@@ -121,6 +211,9 @@ function normalizeAndValidateRestaurantUrl(href, baseUrl) {
     const normalized = new URL(href, baseUrl);
     normalized.hash = '';
     normalized.search = '';
+    if (!isRestaurantDetailPath(normalized.pathname)) {
+      return null;
+    }
     return assertRestaurantUrl(normalized.toString());
   } catch {
     return null;
@@ -140,8 +233,24 @@ function isLikelyRestaurantName(candidate) {
   if (!candidate || candidate.length < 3 || candidate.length > 90) {
     return false;
   }
+  if (candidate.includes('<') || candidate.includes('>') || candidate.includes('$')) {
+    return false;
+  }
+  if (!/[a-zA-Z\u00C0-\u024F]/.test(candidate)) {
+    return false;
+  }
   const normalized = normalizeText(candidate);
-  const rejectedHints = ['envio', 'delivery', 'calificacion', 'rating', 'pedido minimo', 'desde', '$'];
+  const rejectedHints = [
+    'envio',
+    'delivery',
+    'calificacion',
+    'rating',
+    'pedido minimo',
+    'desde',
+    'agregar',
+    'sumar',
+    'ver mas'
+  ];
   return !rejectedHints.some((hint) => normalized.includes(hint));
 }
 
@@ -272,6 +381,12 @@ function hasWholeWord(text, token) {
 }
 
 function parseDeliveryFee(text) {
+  const source = String(text || '');
+
+  if (/(?:env(?:í|i)o|delivery)\s+gratis/i.test(source)) {
+    return 0;
+  }
+
   const patterns = [
     /env(?:í|i)o\s*(?:desde)?\s*\$\s*([0-9.,]+)/i,
     /delivery\s*(?:desde)?\s*\$\s*([0-9.,]+)/i,
@@ -279,11 +394,60 @@ function parseDeliveryFee(text) {
   ];
 
   for (const pattern of patterns) {
-    const match = text.match(pattern);
+    const match = source.match(pattern);
     if (match) {
       return textToNumber(match[1]);
     }
   }
 
   return null;
+}
+
+export function isRestaurantDetailPath(pathname) {
+  const path = String(pathname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '');
+
+  if (!path || path === '/restaurantes' || path === '/restaurant') {
+    return false;
+  }
+  if (!(path.startsWith('/restaurantes/') || path.startsWith('/restaurant/'))) {
+    return false;
+  }
+
+  const parts = path.split('/').filter(Boolean);
+  const last = parts.at(-1);
+  if (!last || GENERIC_PATH_SEGMENTS.has(last)) {
+    return false;
+  }
+  return parts.length >= 2;
+}
+
+function sanitizeRestaurantName(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[|·•]+/g, ' ')
+    .replace(/^\s*[-:]+\s*/, '')
+    .trim();
+}
+
+function deriveNameFromRestaurantUrl(urlString) {
+  try {
+    const parsed = new URL(urlString);
+    const last = parsed.pathname.split('/').filter(Boolean).at(-1) || '';
+    if (!last || GENERIC_PATH_SEGMENTS.has(last.toLowerCase())) {
+      return '';
+    }
+    const slug = last.replace(/^\d+-/, '').replace(/-/g, ' ').trim();
+    if (!isLikelyRestaurantName(slug)) {
+      return '';
+    }
+    return slug
+      .split(' ')
+      .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+      .join(' ');
+  } catch {
+    return '';
+  }
 }

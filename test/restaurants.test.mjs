@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchRestaurants } from '../src/rappi/restaurants.mjs';
+import { searchRestaurants, pickRestaurantName, normalizeAndValidateRestaurantUrl } from '../src/rappi/restaurants.mjs';
 
 function createMockPage(rawCards) {
   return {
@@ -97,4 +97,25 @@ test('searchRestaurants excludes blocked non-restaurant vertical snippets', asyn
 
   assert.equal(results.length, 1);
   assert.equal(results[0].name, 'Pizza Palace');
+});
+
+test('pickRestaurantName strips noisy candidate text and falls back to clean source', () => {
+  const name = pickRestaurantName({
+    href: 'https://www.rappi.com.ar/restaurantes/delivery/72080-guber',
+    nameCandidates: ['Envio $1200', '4.8 ★', 'Güber • Hamburguesas'],
+    shortText: ['Promos', 'Güber'],
+    textBlob: 'Envio $1200 4.8 ★ Güber'
+  });
+
+  assert.equal(name, 'Güber');
+});
+
+test('normalizeAndValidateRestaurantUrl keeps only restaurant detail pages', () => {
+  const baseUrl = 'https://www.rappi.com.ar';
+
+  const listPage = normalizeAndValidateRestaurantUrl('/restaurantes?query=guber', baseUrl);
+  assert.equal(listPage, null);
+
+  const detail = normalizeAndValidateRestaurantUrl('/restaurantes/delivery/72080-guber?utm=abc#hash', baseUrl);
+  assert.equal(detail, 'https://www.rappi.com.ar/restaurantes/delivery/72080-guber');
 });
