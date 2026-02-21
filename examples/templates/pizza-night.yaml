@@ -1,0 +1,8 @@
+restaurantUrl: https://www.rappi.com.ar/restaurantes/pizzeria-demo
+restaurantName: Pizzeria Demo
+currency: ARS
+items:
+  - name: Pizza Napolitana
+    quantity: 1
+  - name: Gaseosa Cola 500ml
+    quantity: 2

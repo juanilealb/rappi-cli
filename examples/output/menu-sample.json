@@ -1,0 +1,43 @@
+{
+  "restaurantName": "Pizzeria Demo",
+  "restaurantUrl": "https://www.rappi.com.ar/restaurantes/pizzeria-demo",
+  "scrapedAt": "2026-02-21T00:00:00.000Z",
+  "itemCount": 5,
+  "items": [
+    {
+      "id": "pizza-muzzarella-8500",
+      "name": "Pizza Muzzarella",
+      "description": "Muzzarella tradicional",
+      "price": 8500,
+      "category": "Pizzas"
+    },
+    {
+      "id": "pizza-napolitana-9100",
+      "name": "Pizza Napolitana",
+      "description": "Tomate, ajo y oregano",
+      "price": 9100,
+      "category": "Pizzas"
+    },
+    {
+      "id": "empanada-carne-1900",
+      "name": "Empanada Carne",
+      "description": "Horno",
+      "price": 1900,
+      "category": "Empanadas"
+    },
+    {
+      "id": "faina-1400",
+      "name": "Faina",
+      "description": "Porcion",
+      "price": 1400,
+      "category": "Acompanamientos"
+    },
+    {
+      "id": "gaseosa-cola-1800",
+      "name": "Gaseosa Cola 500ml",
+      "description": "Sin azucar",
+      "price": 1800,
+      "category": "Bebidas"
+    }
+  ]
+}

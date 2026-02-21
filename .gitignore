@@ -1,0 +1,8 @@
+node_modules/
+.env
+playwright-report/
+*.log
+coverage/
+.DS_Store
+examples/output/*.json
+!examples/output/menu-sample.json

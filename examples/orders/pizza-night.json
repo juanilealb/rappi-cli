@@ -1,0 +1,20 @@
+{
+  "restaurantUrl": "https://www.rappi.com.ar/restaurantes/pizzeria-demo",
+  "restaurantName": "Pizzeria Demo",
+  "currency": "ARS",
+  "items": [
+    {
+      "name": "Pizza Muzzarella",
+      "quantity": 1,
+      "notes": "Extra coccion"
+    },
+    {
+      "name": "Empanada Carne",
+      "quantity": 3
+    },
+    {
+      "name": "Faina",
+      "quantity": 2
+    }
+  ]
+}
