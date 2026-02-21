@@ -1,5 +1,9 @@
 # rappi-cli
 
+> ⚠️ **DEPRECATED**
+> This project is deprecated and no longer maintained. Use at your own risk.
+> No further fixes/features are planned.
+
 Restaurant-only automation CLI for https://www.rappi.com.ar with strict safety controls.
 
 ## Scope and hard constraints
