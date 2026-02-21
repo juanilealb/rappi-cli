@@ -83,48 +83,48 @@ export async function searchRestaurants(page, { baseUrl, query, city, max = 20, 
   const raw = await page.$$eval(
     RESTAURANT_LINK_SELECTOR,
     (anchors, { cardSelectors, nameSelectors }) => {
-    const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-    const pushUnique = (list, value) => {
-      const text = clean(value);
-      if (text && !list.includes(text)) {
-        list.push(text);
-      }
-    };
-    const cardSelector = cardSelectors.join(', ');
-
-    return anchors.slice(0, 1200).map((anchor) => {
-      const card = anchor.closest(cardSelector) || anchor;
-      const href = anchor.href || anchor.getAttribute('href') || '';
-      const nameCandidates = [];
-
-      pushUnique(nameCandidates, anchor.getAttribute('aria-label'));
-      pushUnique(nameCandidates, anchor.getAttribute('title'));
-      pushUnique(nameCandidates, anchor.textContent);
-
-      for (const selector of nameSelectors) {
-        const fromAnchor = anchor.querySelector(selector);
-        const fromCard = card.querySelector(selector);
-        if (fromAnchor) {
-          pushUnique(nameCandidates, fromAnchor.textContent);
+      const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const pushUnique = (list, value) => {
+        const text = clean(value);
+        if (text && !list.includes(text)) {
+          list.push(text);
         }
-        if (fromCard) {
-          pushUnique(nameCandidates, fromCard.textContent);
-        }
-      }
-
-      const shortText = Array.from(card.querySelectorAll('h1,h2,h3,strong,span,p'))
-        .map((element) => clean(element.textContent))
-        .filter((text) => text.length >= 3 && text.length <= 96)
-        .slice(0, 18);
-
-      return {
-        href,
-        anchorText: clean(anchor.textContent),
-        textBlob: clean(card.textContent).slice(0, 700),
-        nameCandidates,
-        shortText
       };
-    });
+      const cardSelector = cardSelectors.join(', ');
+
+      return anchors.slice(0, 1200).map((anchor) => {
+        const card = anchor.closest(cardSelector) || anchor;
+        const href = anchor.href || anchor.getAttribute('href') || '';
+        const nameCandidates = [];
+
+        pushUnique(nameCandidates, anchor.getAttribute('aria-label'));
+        pushUnique(nameCandidates, anchor.getAttribute('title'));
+        pushUnique(nameCandidates, anchor.textContent);
+
+        for (const selector of nameSelectors) {
+          const fromAnchor = anchor.querySelector(selector);
+          const fromCard = card.querySelector(selector);
+          if (fromAnchor) {
+            pushUnique(nameCandidates, fromAnchor.textContent);
+          }
+          if (fromCard) {
+            pushUnique(nameCandidates, fromCard.textContent);
+          }
+        }
+
+        const shortText = Array.from(card.querySelectorAll('h1,h2,h3,strong,span,p'))
+          .map((element) => clean(element.textContent))
+          .filter((text) => text.length >= 3 && text.length <= 96)
+          .slice(0, 18);
+
+        return {
+          href,
+          anchorText: clean(anchor.textContent),
+          textBlob: clean(card.textContent).slice(0, 700),
+          nameCandidates,
+          shortText
+        };
+      });
     },
     {
       cardSelectors: JUANI_RESTAURANT_CARD_SELECTORS,
