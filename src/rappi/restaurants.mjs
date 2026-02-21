@@ -1,7 +1,42 @@
 import { assertRestaurantUrl, assertRestaurantVertical } from './policy.mjs';
 import { textToNumber } from './dom-utils.mjs';
 
-const RESTAURANT_LINK_SELECTOR = 'a[href*="/restaurantes/"], a[href*="/restaurant/"]';
+const JUANI_RESTAURANT_LINK_SELECTORS = [
+  'a[href^="/restaurantes/"]',
+  'a[href^="/restaurant/"]',
+  'a[href*="rappi.com.ar/restaurantes/"]',
+  'a[href*="rappi.com.ar/restaurant/"]',
+  'a[href*="/restaurantes/"]',
+  'a[href*="/restaurant/"]'
+];
+
+const JUANI_RESTAURANT_CARD_SELECTORS = [
+  '[data-testid*="store-card"]',
+  '[data-testid*="restaurant-card"]',
+  '[data-testid*="store"]',
+  '[data-testid*="restaurant"]',
+  '[data-qa*="store-card"]',
+  '[data-qa*="restaurant-card"]',
+  '[data-qa*="store"]',
+  '[data-qa*="restaurant"]',
+  'article',
+  'li',
+  'section',
+  'div'
+];
+
+const JUANI_RESTAURANT_NAME_SELECTORS = [
+  '[data-testid*="store-name"]',
+  '[data-testid*="restaurant-name"]',
+  '[data-qa*="store-name"]',
+  '[data-qa*="restaurant-name"]',
+  'h2',
+  'h3',
+  'strong',
+  '[role="heading"]'
+];
+
+const RESTAURANT_LINK_SELECTOR = JUANI_RESTAURANT_LINK_SELECTORS.join(', ');
 const GENERIC_PATH_SEGMENTS = new Set(['delivery', 'restaurant', 'restaurantes', 'search', 'categoria', 'categorias']);
 
 const STOPWORDS = new Set([
@@ -45,7 +80,9 @@ export async function searchRestaurants(page, { baseUrl, query, city, max = 20, 
   }
   await page.waitForTimeout(400);
 
-  const raw = await page.$$eval(RESTAURANT_LINK_SELECTOR, (anchors) => {
+  const raw = await page.$$eval(
+    RESTAURANT_LINK_SELECTOR,
+    (anchors, { cardSelectors, nameSelectors }) => {
     const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
     const pushUnique = (list, value) => {
       const text = clean(value);
@@ -53,20 +90,10 @@ export async function searchRestaurants(page, { baseUrl, query, city, max = 20, 
         list.push(text);
       }
     };
-
-    const nameSelectors = [
-      '[data-testid*="store-name"]',
-      '[data-testid*="restaurant-name"]',
-      '[data-qa*="store-name"]',
-      '[data-qa*="restaurant-name"]',
-      'h2',
-      'h3',
-      'strong',
-      '[role="heading"]'
-    ];
+    const cardSelector = cardSelectors.join(', ');
 
     return anchors.slice(0, 1200).map((anchor) => {
-      const card = anchor.closest('[data-testid*="store"], [data-qa*="store"], article, li, section, div') || anchor;
+      const card = anchor.closest(cardSelector) || anchor;
       const href = anchor.href || anchor.getAttribute('href') || '';
       const nameCandidates = [];
 
@@ -98,7 +125,12 @@ export async function searchRestaurants(page, { baseUrl, query, city, max = 20, 
         shortText
       };
     });
-  });
+    },
+    {
+      cardSelectors: JUANI_RESTAURANT_CARD_SELECTORS,
+      nameSelectors: JUANI_RESTAURANT_NAME_SELECTORS
+    }
+  );
 
   const dedup = new Map();
   for (const item of raw) {

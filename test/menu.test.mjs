@@ -36,3 +36,27 @@ test('parseMenuCandidate rejects action-only labels', () => {
 
   assert.equal(parsed, null);
 });
+
+test('parseMenuCandidate rejects section-title artifacts', () => {
+  const parsed = parseMenuCandidate({
+    nameText: 'Dulces',
+    categoryTitle: 'Dulces',
+    priceText: '$ 5.000',
+    rawText: 'Dulces $ 5.000'
+  });
+
+  assert.equal(parsed, null);
+});
+
+test('parseMenuCandidate trims concatenated name+description text', () => {
+  const parsed = parseMenuCandidate({
+    nameText: 'Latte grande Con leche descremada y espuma cremosa ideal para desayuno',
+    descriptionText: 'Con leche descremada y espuma cremosa ideal para desayuno',
+    priceText: '$ 4.200',
+    rawText: 'Latte grande Con leche descremada y espuma cremosa ideal para desayuno $ 4.200'
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.name, 'Latte grande');
+  assert.equal(parsed.price, 4200);
+});

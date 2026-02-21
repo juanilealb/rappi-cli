@@ -52,8 +52,27 @@ const MENU_PRICE_SELECTORS = [
   'div'
 ];
 
-const MENU_SECTION_SELECTOR = '[data-testid*="section"], [data-qa*="section"], section';
-const CATEGORY_TITLE_SELECTOR = 'h2, h3, [role="heading"], [data-testid*="title"], [data-qa*="title"]';
+const MENU_SECTION_SELECTORS = [
+  '[data-testid*="menu-section"]',
+  '[data-testid*="section"]',
+  '[data-qa*="menu-section"]',
+  '[data-qa*="section"]',
+  'section'
+];
+
+const CATEGORY_TITLE_SELECTORS = [
+  ':scope > h2',
+  ':scope > h3',
+  ':scope > [role="heading"]',
+  ':scope > [data-testid*="title"]',
+  ':scope > [data-qa*="title"]',
+  'h2',
+  'h3',
+  '[role="heading"]',
+  '[data-testid*="title"]',
+  '[data-qa*="title"]'
+];
+
 const ACTION_HINTS = ['agregar', 'anadir', 'añadir', 'sumar', 'ver mas', 'ver más', 'personalizar', 'editar'];
 
 export async function fetchMenu(page, { restaurantUrl, maxScrollPasses = 8 }) {
@@ -81,16 +100,25 @@ export async function fetchMenu(page, { restaurantUrl, maxScrollPasses = 8 }) {
       continue;
     }
 
-    const id = `${slugify(parsed.name)}-${Math.round(parsed.price || 0)}`;
-    if (!dedup.has(id)) {
-      dedup.set(id, {
-        id,
+    const duplicateKey = findDuplicateMenuItemKey(dedup, parsed);
+    const category = sanitizeCategory(item.categoryTitle);
+    if (!duplicateKey) {
+      const key = buildStableMenuKey(parsed);
+      dedup.set(key, {
+        id: buildMenuItemId(parsed),
         name: parsed.name,
         description: parsed.description,
         price: parsed.price,
-        category: sanitizeCategory(item.categoryTitle)
+        category
       });
+      continue;
     }
+
+    const existing = dedup.get(duplicateKey);
+    existing.name = preferMenuName(existing.name, parsed.name);
+    existing.description = existing.description || parsed.description;
+    existing.category = preferCategory(existing.category, category);
+    existing.id = buildMenuItemId(existing);
   }
 
   return {
@@ -112,14 +140,27 @@ export function parseMenuCandidate(candidate) {
   const nameText = normalizeWhitespace(input.nameText);
   const descriptionText = normalizeWhitespace(input.descriptionText);
   const priceText = normalizeWhitespace(input.priceText);
+  const categoryTitle = sanitizeCategory(input.categoryTitle);
+  const nestedItemCount = Number(input.nestedItemCount);
+  const rawPriceMatches = Number(input.rawPriceMatches);
+
+  if (Number.isFinite(nestedItemCount) && nestedItemCount > 3) {
+    return null;
+  }
+  if (Number.isFinite(rawPriceMatches) && rawPriceMatches > 5) {
+    return null;
+  }
 
   const price = extractPrice(priceText, { allowBareNumber: true }) ?? extractPrice(rawText);
   if (typeof price !== 'number') {
     return null;
   }
 
-  const name = chooseMenuName({ nameText, rawText });
+  const name = chooseMenuName({ nameText, descriptionText, rawText, categoryTitle });
   if (!isLikelyMenuName(name)) {
+    return null;
+  }
+  if (isSectionTitleArtifact({ name, categoryTitle, descriptionText, rawText })) {
     return null;
   }
 
@@ -173,8 +214,19 @@ async function countMenuNodes(page) {
 
 async function extractMenuCandidates(page) {
   return page.evaluate(
-    ({ itemSelectors, nameSelectors, descriptionSelectors, priceSelectors, sectionSelector, categorySelector }) => {
+    ({ itemSelectors, nameSelectors, descriptionSelectors, priceSelectors, sectionSelectors, categorySelectors }) => {
       const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const hasCurrency = (text) => /(?:\$|ars?\$?|ar\$)\s*[0-9]/i.test(text);
+      const isLikelyCategoryTitle = (value) => {
+        const text = clean(value);
+        if (!text || text.length < 3 || text.length > 64) {
+          return false;
+        }
+        if (hasCurrency(text) || !/[a-zA-Z\u00C0-\u024F]/.test(text)) {
+          return false;
+        }
+        return true;
+      };
 
       const firstMatchingText = (root, selectors, { currency = false } = {}) => {
         for (const selector of selectors) {
@@ -189,6 +241,57 @@ async function extractMenuCandidates(page) {
             }
           }
         }
+        return '';
+      };
+
+      const pickCategoryFromContainer = (node, container) => {
+        if (!container || !container.contains(node)) {
+          return '';
+        }
+
+        for (const selector of categorySelectors) {
+          let headings = [];
+          try {
+            headings = container.querySelectorAll(selector);
+          } catch {
+            continue;
+          }
+
+          for (const heading of headings) {
+            if (!heading || node.contains(heading)) {
+              continue;
+            }
+            const text = clean(heading.textContent);
+            if (isLikelyCategoryTitle(text)) {
+              return text;
+            }
+          }
+        }
+
+        return '';
+      };
+
+      const resolveCategoryTitle = (node) => {
+        for (const sectionSelector of sectionSelectors) {
+          const container = node.closest(sectionSelector);
+          const category = pickCategoryFromContainer(node, container);
+          if (category) {
+            return category;
+          }
+        }
+
+        let sibling = node.previousElementSibling;
+        while (sibling) {
+          const text = clean(sibling.textContent);
+          if (isLikelyCategoryTitle(text) && !hasCurrency(text)) {
+            return text;
+          }
+          if (hasCurrency(text)) {
+            break;
+          }
+          sibling = sibling.previousElementSibling;
+        }
+
         return '';
       };
 
@@ -210,14 +313,24 @@ async function extractMenuCandidates(page) {
           : Array.from(document.querySelectorAll('section article, section li, article, li')).slice(0, 1200);
 
       return fallbackNodes.slice(0, 1600).map((node) => {
-        const section = node.closest(sectionSelector);
-        const categoryTitle = clean(section?.querySelector(categorySelector)?.textContent || '');
+        const rawText = clean(node.textContent).slice(0, 600);
+        const priceMatches = rawText.match(/(?:\$|ars?\$?|ar\$)\s*[0-9]/gi) || [];
+        const nestedItemCount = itemSelectors.reduce((count, selector) => {
+          try {
+            return count + node.querySelectorAll(selector).length;
+          } catch {
+            return count;
+          }
+        }, 0);
+
         return {
           nameText: firstMatchingText(node, nameSelectors),
           descriptionText: firstMatchingText(node, descriptionSelectors),
           priceText: firstMatchingText(node, priceSelectors, { currency: true }),
-          rawText: clean(node.textContent).slice(0, 600),
-          categoryTitle
+          rawText,
+          categoryTitle: resolveCategoryTitle(node),
+          rawPriceMatches: priceMatches.length,
+          nestedItemCount
         };
       });
     },
@@ -226,8 +339,8 @@ async function extractMenuCandidates(page) {
       nameSelectors: MENU_NAME_SELECTORS,
       descriptionSelectors: MENU_DESCRIPTION_SELECTORS,
       priceSelectors: MENU_PRICE_SELECTORS,
-      sectionSelector: MENU_SECTION_SELECTOR,
-      categorySelector: CATEGORY_TITLE_SELECTOR
+      sectionSelectors: MENU_SECTION_SELECTORS,
+      categorySelectors: CATEGORY_TITLE_SELECTORS
     }
   );
 }
@@ -255,19 +368,30 @@ function extractPrice(value, { allowBareNumber = false } = {}) {
   return bareMatch ? textToNumber(bareMatch[1]) : null;
 }
 
-function chooseMenuName({ nameText, rawText }) {
-  if (isLikelyMenuName(nameText)) {
-    return sanitizeMenuName(nameText);
+function chooseMenuName({ nameText, descriptionText, rawText, categoryTitle }) {
+  const cleanName = (value) =>
+    sanitizeMenuName(
+      stripConcatenatedName({
+        name: value,
+        descriptionText,
+        rawText,
+        categoryTitle
+      })
+    );
+
+  const directName = cleanName(nameText);
+  if (isLikelyMenuName(directName)) {
+    return directName;
   }
 
   const priceMatch = rawText.match(/(?:\$|ars?\$?|ar\$)\s*[0-9][0-9.\s]*(?:,[0-9]{1,2})?/i);
   const beforePrice = priceMatch ? rawText.slice(0, priceMatch.index).trim() : rawText;
-  const fallback = sanitizeMenuName(beforePrice.split(/[|·•]/)[0]);
+  const fallback = cleanName(beforePrice.split(/[|·•]/)[0]);
   if (isLikelyMenuName(fallback)) {
     return fallback;
   }
 
-  return sanitizeMenuName(rawText.split(/[|·•]/)[0].split(' ').slice(0, 9).join(' '));
+  return cleanName(rawText.split(/[|·•]/)[0].split(' ').slice(0, 9).join(' '));
 }
 
 function chooseDescription({ name, descriptionText, rawText }) {
@@ -334,4 +458,168 @@ function sanitizeCategory(value) {
     return 'General';
   }
   return category;
+}
+
+function stripConcatenatedName({ name, descriptionText, rawText, categoryTitle }) {
+  let output = sanitizeMenuName(name);
+  if (!output) {
+    return '';
+  }
+
+  const description = sanitizeDescription(descriptionText);
+  if (description && output.length > description.length) {
+    output = removeTextFragment(output, description);
+  }
+
+  const category = sanitizeCategory(categoryTitle);
+  if (category !== 'General') {
+    output = removeTextFragment(output, category);
+  }
+
+  const rawPrefix = extractRawPrefix(rawText);
+  if (rawPrefix) {
+    const normalizedOutput = normalizeComparable(output);
+    const normalizedPrefix = normalizeComparable(rawPrefix);
+    if (normalizedOutput.includes(normalizedPrefix) && rawPrefix.length < output.length) {
+      output = rawPrefix;
+    }
+  }
+
+  if (output.split(/\s+/).length > 12) {
+    output = output.split(/\s+(?:-|–|—|:)\s+/)[0].trim();
+  }
+
+  return sanitizeMenuName(output);
+}
+
+function removeTextFragment(text, fragment) {
+  const source = normalizeWhitespace(text);
+  const target = normalizeWhitespace(fragment);
+  if (!source || !target) {
+    return source;
+  }
+
+  const index = source.toLowerCase().indexOf(target.toLowerCase());
+  if (index === -1) {
+    return source;
+  }
+
+  const removed = `${source.slice(0, index)} ${source.slice(index + target.length)}`.replace(/\s+/g, ' ').trim();
+  return removed || source;
+}
+
+function extractRawPrefix(rawText) {
+  const text = normalizeWhitespace(rawText);
+  if (!text) {
+    return '';
+  }
+  const priceMatch = text.match(/(?:\$|ars?\$?|ar\$)\s*[0-9][0-9.\s]*(?:,[0-9]{1,2})?/i);
+  const beforePrice = priceMatch ? text.slice(0, priceMatch.index).trim() : text;
+  return sanitizeMenuName(beforePrice.split(/[|·•]/)[0]);
+}
+
+function isSectionTitleArtifact({ name, categoryTitle, descriptionText, rawText }) {
+  const cleanName = sanitizeMenuName(name);
+  const normalizedName = normalizeComparable(cleanName);
+  if (!normalizedName) {
+    return true;
+  }
+
+  const cleanCategory = sanitizeCategory(categoryTitle);
+  if (cleanCategory !== 'General' && normalizedName === normalizeComparable(cleanCategory)) {
+    return true;
+  }
+
+  if (!sanitizeDescription(descriptionText)) {
+    const rawPrefix = extractRawPrefix(rawText);
+    if (rawPrefix && normalizeComparable(rawPrefix) === normalizedName && cleanName.split(/\s+/).length <= 4) {
+      const normalizedRaw = normalizeComparable(rawText);
+      if (normalizedRaw.startsWith(normalizedName)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function buildStableMenuKey(item) {
+  const normalizedName = normalizeComparable(item?.name).replace(/\s+/g, '-');
+  const roundedPrice = Math.round(Number(item?.price) || 0);
+  return `${normalizedName || slugify(item?.name || '')}-${roundedPrice}`;
+}
+
+function buildMenuItemId(item) {
+  return `${slugify(item?.name || '')}-${Math.round(Number(item?.price) || 0)}`;
+}
+
+function findDuplicateMenuItemKey(dedup, parsedItem) {
+  const stableKey = buildStableMenuKey(parsedItem);
+  if (dedup.has(stableKey)) {
+    return stableKey;
+  }
+
+  const targetName = normalizeComparable(parsedItem.name);
+  const targetPrice = Math.round(Number(parsedItem.price) || 0);
+  for (const [key, existing] of dedup.entries()) {
+    if (Math.round(Number(existing.price) || 0) !== targetPrice) {
+      continue;
+    }
+
+    const existingName = normalizeComparable(existing.name);
+    if (!existingName || !targetName) {
+      continue;
+    }
+    if (existingName === targetName) {
+      return key;
+    }
+    if (existingName.length >= 8 && targetName.length >= 8 && (existingName.includes(targetName) || targetName.includes(existingName))) {
+      return key;
+    }
+  }
+
+  return null;
+}
+
+function preferMenuName(currentName, incomingName) {
+  const current = sanitizeMenuName(currentName);
+  const incoming = sanitizeMenuName(incomingName);
+  if (!current) {
+    return incoming;
+  }
+  if (!incoming) {
+    return current;
+  }
+
+  const normalizedCurrent = normalizeComparable(current);
+  const normalizedIncoming = normalizeComparable(incoming);
+  if (normalizedCurrent === normalizedIncoming) {
+    return current.length <= incoming.length ? current : incoming;
+  }
+  if (normalizedCurrent.length >= 6 && normalizedIncoming.includes(normalizedCurrent)) {
+    return current;
+  }
+  if (normalizedIncoming.length >= 6 && normalizedCurrent.includes(normalizedIncoming)) {
+    return incoming;
+  }
+  return current;
+}
+
+function preferCategory(currentCategory, incomingCategory) {
+  const current = sanitizeCategory(currentCategory);
+  const incoming = sanitizeCategory(incomingCategory);
+  if (current === 'General' && incoming !== 'General') {
+    return incoming;
+  }
+  return current;
+}
+
+function normalizeComparable(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
