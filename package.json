@@ -1,0 +1,29 @@
+{
+  "name": "rappi-cli",
+  "version": "0.1.0",
+  "description": "Restaurant-only Rappi automation CLI with strict no-purchase safety defaults",
+  "type": "module",
+  "bin": {
+    "rappi-cli": "./bin/rappi-cli.mjs"
+  },
+  "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs",
+    "check": "npm run lint && npm run test && npm run smoke"
+  },
+  "keywords": [
+    "rappi",
+    "automation",
+    "playwright",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.52.0"
+  }
+}
