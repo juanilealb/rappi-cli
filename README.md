@@ -5,7 +5,7 @@ Restaurant-only automation CLI for https://www.rappi.com.ar with strict safety c
 ## Scope and hard constraints
 
 - Restaurants only. Non-restaurant verticals (supermarket, pharmacy, etc.) are blocked.
-- Real purchases are permanently disabled by policy in this MVP.
+- Real purchases are disabled by default.
 - Payment flow is disabled by default and guarded by:
   1. explicit `--confirm-pay`
   2. second interactive confirmation (`y/N` + typed `CONFIRM PAY`)
@@ -28,6 +28,8 @@ src/
     args.mjs
     commands.mjs
     help.mjs
+  flow/
+    callback.mjs
   rappi/
     browser.mjs
     checkout.mjs
@@ -124,12 +126,31 @@ node bin/rappi-cli.mjs checkout dry-run --cart-file examples/output/cart.json --
 node bin/rappi-cli.mjs reorder --template examples/templates/pizza-night.yaml --menu-file examples/output/menu-sample.json --out examples/output/reorder-cart.json
 ```
 
+### 6) Telegram-style callback flow
+
+```bash
+node bin/rappi-cli.mjs flow callback --data "rappi:menu:start" --json
+```
+
+Optional flags:
+- `--state-file ~/.config/rappi-cli/flow-state.json`
+- `--restaurant-url https://www.rappi.com.ar/restaurantes/215137-guber`
+- `--headless true|false`
+
+The command prints JSON in `{ "message": "...", "buttons": [[...]] }` format and persists flow state to `~/.config/rappi-cli/flow-state.json` by default.
+
+Warning: a live checkout click is only attempted when all are true:
+1. `RAPPI_LIVE_ORDER_ENABLED=true`
+2. callback is `rappi:confirm:pay`
+3. state already has `checkoutConfirmed=true` (after `rappi:confirm:checkout`)
+
 ## Security notes
 
 - Session file contains live auth tokens. Treat it as a secret.
 - Session directory and file are written with restrictive permissions (`0700` dir, `0600` file) when supported.
 - No passwords, OTP codes, or card data are stored in source code.
 - Real purchase call path is blocked by `REAL_PURCHASES_DISABLED = true` in `src/rappi/policy.mjs`.
+- Callback live order click path is disabled unless `RAPPI_LIVE_ORDER_ENABLED=true` and callback state is checkout-confirmed.
 - Payment confirmation intentionally requires two user confirmations when `--confirm-pay` is present.
 
 ## Selector drift and anti-bot caveats

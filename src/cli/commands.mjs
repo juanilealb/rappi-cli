@@ -8,6 +8,13 @@ import { parseOrderLikeFile } from '../order/parse.mjs';
 import { buildCartPlan } from '../order/cart-builder.mjs';
 import { buildDryRunSummary, guardPaymentExecution } from '../rappi/checkout.mjs';
 import { exists, readJson, writeJsonSecure } from '../utils/fs.mjs';
+import {
+  DEFAULT_CALLBACK_RESTAURANT_URL,
+  defaultFlowStateFile,
+  loadFlowState,
+  runFlowCallback,
+  saveFlowState
+} from '../flow/callback.mjs';
 
 export async function runCommand(positionals, options) {
   const config = getConfig();
@@ -31,6 +38,10 @@ export async function runCommand(positionals, options) {
 
   if (group === 'checkout' && action === 'dry-run') {
     return runCheckoutDryRun(options);
+  }
+
+  if (group === 'flow' && action === 'callback') {
+    return runFlowCallbackCommand(options, config);
   }
 
   if (group === 'reorder') {
@@ -172,6 +183,31 @@ async function runReorder(options, config) {
   };
 
   await runCartBuild(delegatedOptions, config);
+}
+
+async function runFlowCallbackCommand(options, config) {
+  const callbackData = String(options.data || '').trim();
+  if (!callbackData) {
+    throw new Error('flow callback requires --data');
+  }
+
+  const stateFile = options['state-file']
+    ? path.resolve(String(options['state-file']))
+    : defaultFlowStateFile(config.configDir);
+  const restaurantUrl = String(options['restaurant-url'] || DEFAULT_CALLBACK_RESTAURANT_URL).trim();
+  const state = loadFlowState(stateFile, { defaultRestaurantUrl: restaurantUrl });
+
+  const payload = await runFlowCallback({
+    callbackData,
+    state,
+    restaurantUrl,
+    sessionFile: config.sessionFile,
+    headless: normalizeBoolean(options.headless, config.headless),
+    slowMo: Number(options.slowmo || config.slowMo || 0)
+  });
+
+  saveFlowState(stateFile, state);
+  printData(payload, true);
 }
 
 function printData(data, asJson = false) {
