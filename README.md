@@ -154,7 +154,19 @@ npm run check
 
 ## BLOCKER (GitHub creation/push)
 
-Status: pending repository creation/push attempt in this environment.
+Status: blocked in this environment (2026-02-21).
+
+Observed failures:
+
+```bash
+gh auth status
+# token in ~/.config/gh/hosts.yml is invalid for account juanilealb
+```
+
+```bash
+gh repo create Juanilealb/rappi-cli --public --source=. --remote=origin --push
+# error connecting to api.github.com
+```
 
 If auth blocks creation, run:
 
