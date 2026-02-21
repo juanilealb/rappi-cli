@@ -9,6 +9,15 @@ export const DEFAULT_CALLBACK_RESTAURANT_URL = 'https://www.rappi.com.ar/restaur
 const DEFAULT_STAGE = 'idle';
 const MENU_PAGE_SIZE = 6;
 
+const DEFAULT_CHECKOUT_VIEW = {
+  restaurantName: 'Guber',
+  serviceFee: 552,
+  tipAmount: 620,
+  tipPercent: 6,
+  address: 'Moldes 657, CABA',
+  paymentMethod: 'Visa •••• 9428'
+};
+
 export function parseFlowCallbackData(callbackData) {
   const raw = String(callbackData || '').trim();
   if (!raw.startsWith('rappi:')) {
@@ -311,7 +320,7 @@ function buildMenuPayload(state, pageNumber = 0) {
 
 function buildCartSummary(state) {
   const lines = [];
-  let total = 0;
+  let subtotal = 0;
 
   for (const [itemId, qty] of Object.entries(state.cartItems || {})) {
     const quantity = Number(qty || 0);
@@ -322,7 +331,7 @@ function buildCartSummary(state) {
     const item = findMenuItemById(state, itemId);
     const unitPrice = Number(item?.price || 0);
     const lineTotal = unitPrice * quantity;
-    total += lineTotal;
+    subtotal += lineTotal;
 
     lines.push({
       itemId,
@@ -336,19 +345,32 @@ function buildCartSummary(state) {
   if (lines.length === 0) {
     return {
       lines,
-      total,
+      total: 0,
       message: 'Carrito vacio. Selecciona productos desde el menu.'
     };
   }
 
-  const detail = lines
-    .map((line) => `${line.quantity}x ${line.name} - ARS ${formatPrice(line.lineTotal)}`)
-    .join('\n');
+  const deliveryFee = 0;
+  const serviceFee = DEFAULT_CHECKOUT_VIEW.serviceFee;
+  const tipAmount = DEFAULT_CHECKOUT_VIEW.tipAmount;
+  const total = subtotal + deliveryFee + serviceFee + tipAmount;
+  const topLine = lines[0];
 
   return {
     lines,
     total,
-    message: `Resumen checkout:\n${detail}\nTotal: ARS ${formatPrice(total)}`
+    message: [
+      'Resumen checkout (dry-run)',
+      `• Restaurante: ${DEFAULT_CHECKOUT_VIEW.restaurantName}`,
+      `• Producto: ${topLine.name} (${topLine.quantity}u)`,
+      `• Costo productos: ${formatCurrency(subtotal)}`,
+      `• Envío: ${formatCurrency(deliveryFee)} (gratis)`,
+      `• Tarifa servicio: ${formatCurrency(serviceFee)}`,
+      `• Propina: ${formatCurrency(tipAmount)} (${DEFAULT_CHECKOUT_VIEW.tipPercent}%)`,
+      `• Total: ${formatCurrency(total)}`,
+      `• Dirección: ${DEFAULT_CHECKOUT_VIEW.address}`,
+      `• Pago: ${DEFAULT_CHECKOUT_VIEW.paymentMethod}`
+    ].join('\n')
   };
 }
 
@@ -412,6 +434,16 @@ function formatPrice(value) {
   }).format(Math.round(numeric));
 }
 
+function formatCurrency(value) {
+  const numeric = Number(value || 0);
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(numeric);
+}
+
 function withCancelButton(payload) {
   return {
     message: payload.message,
@@ -453,9 +485,18 @@ export async function attemptLivePayOnCheckout({ sessionFile, restaurantUrl, hea
     const page = await ctx.context.newPage();
     await page.goto(safeRestaurantUrl, { waitUntil: 'domcontentloaded' });
 
-    const checkoutUrl = new URL('/checkout', safeRestaurantUrl).toString();
+    const checkoutUrl = new URL('/checkout/restaurant', safeRestaurantUrl).toString();
     await page.goto(checkoutUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForLoadState('networkidle', { timeout: 7000 }).catch(() => {});
+
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login')) {
+      return {
+        attempted: true,
+        submitted: false,
+        message: 'Pago en vivo bloqueado: sesión expirada/no autenticada (redirigió a /login). Rehacer login bootstrap.'
+      };
+    }
 
     const placeOrderButton = page.locator("[data-qa='place-order-button']").first();
     const visible = await placeOrderButton.isVisible({ timeout: 7000 }).catch(() => false);
